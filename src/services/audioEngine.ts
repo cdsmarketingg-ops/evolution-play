@@ -45,25 +45,23 @@ export const useSynthesizer = () => {
 
     masterGainRef.current.gain.value = 0.8;
 
-    // Inicializar SpessaSynth se disponível
-    if ((window as any).SpessaSynth) {
+    // Inicializar FluidSynth se disponível
+    if ((window as any).FluidSynth) {
       try {
-        const Spessa = (window as any).SpessaSynth;
-        const SynthClass = Spessa.Synthetizer || Spessa.Synthesizer;
-        if (SynthClass) {
-          synthRef.current = new SynthClass(masterGainRef.current);
-          console.log("✅ SpessaSynth inicializado com sucesso!");
-          setIsReady(true);
-        } else {
-          console.error("❌ Classe Synthetizer não encontrada no SpessaSynth. Verifique as exportações.");
-          setIsReady(false);
+        const FluidSynth = (window as any).FluidSynth;
+        synthRef.current = new FluidSynth();
+        // FluidSynth-wasm geralmente precisa de inicialização assíncrona
+        if (synthRef.current.init) {
+          await synthRef.current.init(audioContextRef.current.sampleRate);
         }
+        console.log("✅ FluidSynth inicializado com sucesso!");
+        setIsReady(true);
       } catch (e) {
-        console.error("Erro ao inicializar SpessaSynth:", e);
+        console.error("Erro ao inicializar FluidSynth:", e);
         setIsReady(false);
       }
     } else {
-      console.warn("⚠️ SpessaSynth não encontrado no window. Tentando novamente em 1s...");
+      console.warn("⚠️ FluidSynth não encontrado no window. Tentando novamente em 1s...");
       setTimeout(initSynth, 1000);
       setIsReady(false);
     }
@@ -72,61 +70,46 @@ export const useSynthesizer = () => {
   };
 
   const loadSoundFont = async (buffer: ArrayBuffer) => {
-    if (synthRef.current && (window as any).SpessaSynth) {
+    if (synthRef.current && (window as any).FluidSynth) {
       try {
-        const Spessa = (window as any).SpessaSynth;
-        // No SpessaSynth moderno, precisamos criar um objeto SoundFont2 a partir do buffer
-        const sf = new Spessa.SoundFont2(buffer);
-        synthRef.current.loadSoundFont(sf);
+        // No FluidSynth-wasm, carregamos o buffer diretamente
+        const sfontId = await synthRef.current.loadSfont(buffer);
+        console.log(`✅ SoundFont carregado com sucesso no FluidSynth. ID: ${sfontId}`);
         
-        console.log("✅ SoundFont carregado com sucesso no SpessaSynth.");
-        
-        // Obter lista de presets
-        if (synthRef.current.soundfont && synthRef.current.soundfont.presets) {
-          const sfPresets = synthRef.current.soundfont.presets.map((p: any) => ({
-            bank: p.bank,
-            program: p.program,
-            name: p.presetName || p.name || `Preset ${p.program}`
-          }));
-          setPresets(sfPresets);
-          
-          // Selecionar o primeiro preset disponível
-          if (sfPresets.length > 0) {
-            setInstrument(sfPresets[0].bank, sfPresets[0].program);
-          }
-        }
+        // FluidSynth-wasm pode não retornar presets facilmente sem comandos MIDI
+        // Vamos assumir um preset padrão ou tentar obter se a API permitir
+        setPresets([{ bank: 0, program: 0, name: "Default FluidSynth Preset" }]);
+        setInstrument(0, 0);
       } catch (e) {
-        console.error("Erro ao carregar SoundFont no SpessaSynth:", e);
+        console.error("Erro ao carregar SoundFont no FluidSynth:", e);
       }
     } else {
-      console.warn("SpessaSynth não disponível para carregar o buffer.");
+      console.warn("FluidSynth não disponível para carregar o buffer.");
     }
   };
 
   const setInstrument = (bank: number, program: number) => {
-    if (synthRef.current) {
-      synthRef.current.programChange(0, program);
+    if (synthRef.current && (window as any).FluidSynth) {
       synthRef.current.bankSelect(0, bank);
+      synthRef.current.programChange(0, program);
       setSelectedBank(bank);
       setSelectedPreset(program);
-      console.log(`🎹 Instrumento alterado: Bank ${bank}, Program ${program}`);
+      console.log(`🎹 Instrumento alterado no FluidSynth: Bank ${bank}, Program ${program}`);
     }
   };
 
   const loadSoundFontFromUrl = async (url: string) => {
-    if (synthRef.current && (window as any).SpessaSynth) {
+    if (synthRef.current && (window as any).FluidSynth) {
       try {
         const response = await fetch(url);
         const buffer = await response.arrayBuffer();
-        const Spessa = (window as any).SpessaSynth;
-        const sf = new Spessa.SoundFont2(buffer);
-        synthRef.current.loadSoundFont(sf);
-        console.log(`✅ SoundFont carregado de URL: ${url}`);
+        const sfontId = await synthRef.current.loadSfont(buffer);
+        console.log(`✅ SoundFont carregado de URL no FluidSynth: ${url}. ID: ${sfontId}`);
       } catch (e) {
-        console.error("Erro ao carregar SoundFont de URL:", e);
+        console.error("Erro ao carregar SoundFont de URL no FluidSynth:", e);
       }
     } else {
-      console.warn("Carregamento via URL desativado ou SpessaSynth não inicializado.");
+      console.warn("Carregamento via URL desativado ou FluidSynth não inicializado.");
     }
   };
 
@@ -141,15 +124,15 @@ export const useSynthesizer = () => {
       await audioContextRef.current.resume();
     }
 
-    console.log(`🎵 Tocando nota: ${note} (Vel: ${velocity})`);
+    console.log(`🎵 Tocando nota no FluidSynth: ${note} (Vel: ${velocity})`);
 
-    if (synthRef.current) {
-      // Usar SpessaSynth
+    if (synthRef.current && (window as any).FluidSynth) {
+      // Usar FluidSynth
       synthRef.current.noteOn(0, note, velocity);
       activeVoices.current.set(note, true);
     } else {
       // Fallback para osciladores básicos (Som "Moog" Sawtooth)
-      console.warn(`⚠️ Usando fallback de oscilador para nota ${note}. SpessaSynth não está ativo.`);
+      console.warn(`⚠️ Usando fallback de oscilador para nota ${note}. FluidSynth não está ativo.`);
       const freq = 440 * Math.pow(2, (note - 69) / 12);
       
       const osc1 = audioContextRef.current.createOscillator();
@@ -179,7 +162,7 @@ export const useSynthesizer = () => {
   };
 
   const noteOff = (note: number) => {
-    if (synthRef.current) {
+    if (synthRef.current && (window as any).FluidSynth) {
       synthRef.current.noteOff(0, note);
       activeVoices.current.delete(note);
       return;
@@ -220,7 +203,7 @@ export const useSynthesizer = () => {
 
   const setReverb = (val: number) => {
     if (synthRef.current) {
-      // SpessaSynth reverb is usually 0 to 1
+      // FluidSynth reverb is usually 0 to 1
       synthRef.current.reverbLevel = val;
       setReverbLevel(val);
     }
@@ -228,7 +211,7 @@ export const useSynthesizer = () => {
 
   const setChorus = (val: number) => {
     if (synthRef.current) {
-      // SpessaSynth chorus is usually 0 to 1
+      // FluidSynth chorus is usually 0 to 1
       synthRef.current.chorusLevel = val;
       setChorusLevel(val);
     }

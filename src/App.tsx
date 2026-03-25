@@ -507,7 +507,7 @@ export default function App() {
               </div>
             ) : (
               <p className="text-[8px] text-green-500 mt-2 uppercase font-mono leading-tight">
-                SpessaSynth active. Real samples enabled.
+                FluidSynth active. Real samples enabled.
               </p>
             )}
           </div>
