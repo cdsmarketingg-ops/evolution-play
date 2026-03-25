@@ -50,20 +50,18 @@ export const useSynthesizer = () => {
       try {
         const FluidSynth = (window as any).FluidSynth;
         
-        // Algumas versões usam um padrão de inicialização específico
-        if (typeof FluidSynth === 'function') {
-          synthRef.current = new FluidSynth();
-        } else if (FluidSynth.create) {
-          synthRef.current = await FluidSynth.create();
-        }
-
+        // js-fluidsynth costuma ser uma classe direta
+        synthRef.current = new FluidSynth();
+        
         if (synthRef.current) {
           // Inicializar com o sample rate do contexto
+          // No js-fluidsynth, o init pode ser síncrono ou assíncrono
           if (synthRef.current.init) {
             await synthRef.current.init(audioContextRef.current.sampleRate);
           }
           
           // Conectar ao master gain
+          // js-fluidsynth geralmente expõe um AudioNode ou se conecta diretamente
           if (synthRef.current.getAudioNode) {
             const node = synthRef.current.getAudioNode();
             node.connect(masterGainRef.current);
@@ -71,7 +69,7 @@ export const useSynthesizer = () => {
             synthRef.current.connect(masterGainRef.current);
           }
 
-          console.log("✅ FluidSynth (@logue) inicializado com sucesso!");
+          console.log("✅ FluidSynth (js-fluidsynth) inicializado com sucesso!");
           setIsReady(true);
         }
       } catch (e) {
@@ -79,8 +77,8 @@ export const useSynthesizer = () => {
         setIsReady(false);
       }
     } else {
-      console.warn("⚠️ FluidSynth não encontrado no window. Tentando novamente em 1s...");
-      setTimeout(initSynth, 1000);
+      console.warn("⚠️ FluidSynth não encontrado no window. Tentando novamente em 2s...");
+      setTimeout(initSynth, 2000);
       setIsReady(false);
     }
 
@@ -296,6 +294,14 @@ export const useSynthesizer = () => {
     device.onmidimessage = handleMidiMessage;
     return () => { device.onmidimessage = null; };
   }, [selectedMidiId, midiDevices]);
+
+  // Auto-inicializar ao montar
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      initSynth();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, []);
 
   return {
     isReady,
