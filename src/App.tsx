@@ -136,10 +136,13 @@ export default function App() {
   const loadLibrary = async () => {
     try {
       const response = await fetch('/api/soundfonts');
+      if (!response.ok) {
+        throw new Error(`Server responded with ${response.status}`);
+      }
       const data = await response.json();
       setLibrary(data);
     } catch (err) {
-      console.error("Failed to load library", err);
+      console.warn("Failed to load library from server. The app will work in memory-only mode.", err);
     }
   };
 
@@ -155,26 +158,37 @@ export default function App() {
 
     setIsLoading(true);
     try {
+      // Garantir que o motor está inicializado antes de carregar o timbre
+      if (!isReady) {
+        await initSynth();
+      }
+
+      // 1. Carregar na memória do navegador imediatamente para feedback instantâneo
+      const buffer = await file.arrayBuffer();
+      await loadSoundFont(buffer);
+      setSfName(file.name.toUpperCase());
+
+      // 2. Tentar persistir no servidor em segundo plano
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/upload', {
+      fetch('/api/upload', {
         method: 'POST',
         body: formData,
+      }).then(async (response) => {
+        if (response.ok) {
+          await loadLibrary();
+          console.log("✅ Timbre persistido no servidor com sucesso.");
+        } else {
+          console.warn("⚠️ O servidor não pôde salvar o timbre, mas ele está carregado na memória atual.");
+        }
+      }).catch(err => {
+        console.warn("⚠️ Erro de conexão com o servidor. O timbre funcionará apenas nesta sessão.", err);
       });
 
-      if (response.ok) {
-        await loadLibrary();
-        const data = await response.json();
-        setSfName(data.filename.toUpperCase());
-        
-        // Load into synth from the new server URL
-        const buffer = await file.arrayBuffer();
-        await loadSoundFont(buffer);
-      }
     } catch (error) {
-      console.error("Failed to upload soundfont", error);
-      alert("Erro ao enviar o arquivo .sf2 para o servidor");
+      console.error("Failed to load soundfont", error);
+      alert("Erro ao carregar o arquivo .sf2");
     } finally {
       setIsLoading(false);
     }
