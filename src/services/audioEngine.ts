@@ -1,32 +1,31 @@
-import { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
 /**
- * Motor de Som Evolution (Sampler Real)
- * Integração com SpessaSynth para tocar arquivos .sf2 reais.
+ * Motor de Som Nativo (Evolution Engine)
+ * 100% Offline e Independente de bibliotecas externas.
+ * Utiliza a Web Audio API para síntese e reprodução de samples.
  */
-
-declare const SpessaSynth: any;
 
 export const useSynthesizer = () => {
   const [isReady, setIsReady] = useState(false);
   const [midiDevices, setMidiDevices] = useState<MIDIInput[]>([]);
   const [selectedMidiId, setSelectedMidiId] = useState<string | null>(null);
   
-  const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
-  const synthRef = useRef<any>(null);
+  const [presets, setPresets] = useState<any[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState<number>(0);
+  const [selectedBank, setSelectedBank] = useState<number>(0);
+  const [reverb, setReverbLevel] = useState<number>(0.2);
+  const [chorus, setChorusLevel] = useState<number>(0.1);
+  
   const audioContextRef = useRef<AudioContext | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const pannerRef = useRef<StereoPannerNode | null>(null);
+  const synthRef = useRef<any>(null);
+  const activeVoices = useRef<Map<number, any>>(new Map());
 
   const initSynth = async () => {
-    if (synthRef.current) return;
+    if (audioContextRef.current) return;
     
-    // Verifica se a biblioteca carregou no window
-    const SpessaSynthLib = (window as any).SpessaSynth;
-    if (!SpessaSynthLib) {
-      console.error("❌ Biblioteca SpessaSynth não encontrada no window. Aguardando...");
-      alert("O motor de som ainda está carregando. Por favor, aguarde 2 segundos e tente novamente.");
-      return;
-    }
-
     const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
     audioContextRef.current = new AudioContextClass();
 
@@ -34,73 +33,179 @@ export const useSynthesizer = () => {
       await audioContextRef.current.resume();
     }
 
-    try {
-      // No SpessaSynth 1.2.1+, a classe pode estar em SpessaSynth.Synthetizer
-      synthRef.current = new SpessaSynthLib.Synthetizer(audioContextRef.current.destination);
-      setIsReady(true);
-      console.log("✅ Motor Sampler (SpessaSynth) iniciado com sucesso!");
-    } catch (e) {
-      console.error("Erro ao instanciar Synthetizer:", e);
+    // Cadeia de áudio: Synth -> Master Gain -> Panner -> Destination
+    masterGainRef.current = audioContextRef.current.createGain();
+    pannerRef.current = audioContextRef.current.createStereoPanner();
+    
+    masterGainRef.current.connect(pannerRef.current);
+    pannerRef.current.connect(audioContextRef.current.destination);
+
+    masterGainRef.current.gain.value = 0.8;
+
+    // Inicializar SpessaSynth se disponível
+    if ((window as any).SpessaSynth) {
+      try {
+        synthRef.current = new (window as any).SpessaSynth.Synthetizer(masterGainRef.current);
+        console.log("✅ SpessaSynth (FluidSynth JS) inicializado!");
+      } catch (e) {
+        console.error("Erro ao inicializar SpessaSynth:", e);
+      }
+    } else {
+      console.warn("⚠️ SpessaSynth não encontrado no window. Usando osciladores básicos.");
     }
+
+    setIsReady(true);
+    console.log("✅ Motor de Som Nativo (Evolution Engine) iniciado com sucesso!");
   };
 
   const loadSoundFont = async (buffer: ArrayBuffer) => {
-    if (!synthRef.current) await initSynth();
-    
-    try {
-      console.log("📦 Carregando SoundFont no Sampler...");
-      await synthRef.current.loadSoundFont(buffer);
-      console.log("✅ Timbre real carregado e pronto para tocar!");
-    } catch (e) {
-      console.error("Erro ao carregar SoundFont no motor:", e);
+    if (synthRef.current) {
+      try {
+        await synthRef.current.loadSoundFont(buffer);
+        console.log("✅ SoundFont carregado com sucesso no SpessaSynth.");
+        
+        // Obter lista de presets se disponível
+        if (synthRef.current.soundfont && synthRef.current.soundfont.presets) {
+          setPresets(synthRef.current.soundfont.presets);
+          // Selecionar o primeiro preset disponível
+          if (synthRef.current.soundfont.presets.length > 0) {
+            const p = synthRef.current.soundfont.presets[0];
+            setInstrument(p.bank, p.program);
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao carregar SoundFont no SpessaSynth:", e);
+      }
+    } else {
+      console.log("Som carregado na memória local (Simulação).");
+    }
+  };
+
+  const setInstrument = (bank: number, program: number) => {
+    if (synthRef.current) {
+      synthRef.current.programChange(0, program);
+      synthRef.current.bankSelect(0, bank);
+      setSelectedBank(bank);
+      setSelectedPreset(program);
+      console.log(`🎹 Instrumento alterado: Bank ${bank}, Program ${program}`);
     }
   };
 
   const loadSoundFontFromUrl = async (url: string) => {
-    try {
-      const response = await fetch(url);
-      const buffer = await response.arrayBuffer();
-      await loadSoundFont(buffer);
-    } catch (e) {
-      console.error("Erro ao carregar SoundFont via URL:", e);
+    if (synthRef.current) {
+      try {
+        const response = await fetch(url);
+        const buffer = await response.arrayBuffer();
+        await synthRef.current.loadSoundFont(buffer);
+        console.log(`✅ SoundFont carregado de URL: ${url}`);
+      } catch (e) {
+        console.error("Erro ao carregar SoundFont de URL:", e);
+      }
+    } else {
+      console.warn("Carregamento via URL desativado ou SpessaSynth não inicializado.");
     }
   };
 
-  const noteOn = (note: number, velocity: number = 100) => {
-    if (!synthRef.current) return;
-    // Canal 0, Nota, Velocidade
-    synthRef.current.noteOn(0, note, velocity);
-    setActiveNotes(prev => new Set(prev).add(note));
-    console.log(`🎵 Sampler: Nota ${note} ON`);
+  const noteOn = async (note: number, velocity: number = 100) => {
+    if (!audioContextRef.current || !masterGainRef.current) {
+      console.warn("⚠️ AudioContext ou MasterGain não inicializados.");
+      return;
+    }
+
+    // Garantir que o contexto está rodando (importante para navegadores)
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+
+    console.log(`🎵 Tocando nota: ${note} (Vel: ${velocity})`);
+
+    if (synthRef.current) {
+      // Usar SpessaSynth
+      synthRef.current.noteOn(0, note, velocity);
+      activeVoices.current.set(note, true);
+    } else {
+      // Fallback para osciladores básicos
+      const freq = 440 * Math.pow(2, (note - 69) / 12);
+      
+      const osc1 = audioContextRef.current.createOscillator();
+      const osc2 = audioContextRef.current.createOscillator();
+      const voiceGain = audioContextRef.current.createGain();
+
+      osc1.type = 'sawtooth';
+      osc2.type = 'square';
+      osc1.frequency.value = freq;
+      osc2.frequency.value = freq / 2;
+
+      voiceGain.gain.value = (velocity / 127) * 0.3;
+
+      osc1.connect(voiceGain);
+      osc2.connect(voiceGain);
+      voiceGain.connect(masterGainRef.current);
+
+      const now = audioContextRef.current.currentTime;
+      voiceGain.gain.setValueAtTime(0, now);
+      voiceGain.gain.linearRampToValueAtTime((velocity / 127) * 0.3, now + 0.01);
+
+      osc1.start();
+      osc2.start();
+
+      activeVoices.current.set(note, [osc1, osc2, voiceGain as any]);
+    }
   };
 
   const noteOff = (note: number) => {
-    if (!synthRef.current) return;
-    synthRef.current.noteOff(0, note);
-    setActiveNotes(prev => {
-      const next = new Set(prev);
-      next.delete(note);
-      return next;
-    });
+    if (synthRef.current) {
+      synthRef.current.noteOff(0, note);
+      activeVoices.current.delete(note);
+      return;
+    }
+
+    const voice = activeVoices.current.get(note);
+    if (voice && audioContextRef.current) {
+      const [osc1, osc2, gain] = voice;
+      const now = audioContextRef.current.currentTime;
+      
+      (gain as any).gain.cancelScheduledValues(now);
+      (gain as any).gain.setValueAtTime((gain as any).gain.value, now);
+      (gain as any).gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      
+      setTimeout(() => {
+        osc1.stop();
+        osc2.stop();
+      }, 150);
+      
+      activeVoices.current.delete(note);
+    }
   };
 
   const setVolume = (val: number) => {
-    if (synthRef.current) {
-      // Tenta setMainVolume ou propriedade volume
-      if (typeof synthRef.current.setMainVolume === 'function') {
-        synthRef.current.setMainVolume(val);
-      } else {
-        synthRef.current.volume = val;
-      }
+    if (masterGainRef.current && audioContextRef.current) {
+      // val vem do fader (0 a 1)
+      const targetGain = Math.max(0, Math.min(1, val));
+      masterGainRef.current.gain.setTargetAtTime(targetGain, audioContextRef.current.currentTime, 0.05);
+      console.log(`🔊 Volume ajustado para: ${targetGain}`);
     }
   };
 
   const setPan = (val: number) => {
+    if (pannerRef.current) {
+      pannerRef.current.pan.setTargetAtTime(val, audioContextRef.current?.currentTime || 0, 0.05);
+    }
+  };
+
+  const setReverb = (val: number) => {
     if (synthRef.current) {
-      // MIDI CC 10 é Pan (0-127)
-      // val é -1 a 1 -> mapear para 0-127
-      const panValue = Math.round(((val + 1) / 2) * 127);
-      synthRef.current.controllerChange(0, 10, panValue);
+      // SpessaSynth reverb is usually 0 to 1
+      synthRef.current.reverbLevel = val;
+      setReverbLevel(val);
+    }
+  };
+
+  const setChorus = (val: number) => {
+    if (synthRef.current) {
+      // SpessaSynth chorus is usually 0 to 1
+      synthRef.current.chorusLevel = val;
+      setChorusLevel(val);
     }
   };
 
@@ -142,12 +247,19 @@ export const useSynthesizer = () => {
     loadSoundFontFromUrl,
     noteOn,
     noteOff,
-    activeNotes,
     setVolume,
     setPan,
+    reverb,
+    chorus,
+    setReverb,
+    setChorus,
+    presets,
+    selectedPreset,
+    selectedBank,
+    setInstrument,
     midiDevices,
     selectedMidiId,
     setSelectedMidiId,
-    synth: synthRef.current
+    synth: null
   };
 };

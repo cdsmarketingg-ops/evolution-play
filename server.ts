@@ -46,10 +46,9 @@ async function startServer() {
   });
 
   // Rota para upload de soundfont
-  app.post('/api/upload', upload.single('file'), (req, res) => {
-    const file = (req as any).file;
-    if (!file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
-    res.json({ message: 'Upload concluído', filename: file.filename });
+  app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
+    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    res.json({ message: 'Upload concluído', filename: req.file.filename });
   });
 
   // Rota para deletar soundfont

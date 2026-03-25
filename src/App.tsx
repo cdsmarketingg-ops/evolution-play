@@ -13,45 +13,87 @@ import {
   FolderOpen,
   Trash2,
   Plus,
-  ChevronRight,
-  X
+  ChevronRight
 } from 'lucide-react';
+import { soundFontStorage, SavedSoundFont } from './services/storage';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSynthesizer } from './services/audioEngine';
 
-const Knob = ({ label, value, onChange, min = 0, max = 1, step = 0.01 }: { 
+const Knob = ({ label, value, onChange, min = 0, max = 100, unit = "" }: { 
   label: string, 
   value: number, 
   onChange: (v: number) => void,
   min?: number,
   max?: number,
-  step?: number
+  unit?: string
 }) => {
   const rotation = ((value - min) / (max - min)) * 270 - 135;
   
   return (
-    <div className="flex flex-col items-center gap-2 group">
-      <span className="text-[9px] uppercase font-bold text-hw-text-dim group-hover:text-hw-accent transition-colors">
+    <div className="flex flex-col items-center gap-1 group">
+      <span className="text-[10px] uppercase font-mono text-hw-text-dim group-hover:text-hw-accent transition-colors">
         {label}
       </span>
-      <div className="relative w-16 h-16 bg-hw-bg rounded-full border-2 border-hw-border flex items-center justify-center group cursor-ns-resize">
+      <div 
+        className="relative w-10 h-10 rounded-full bg-hw-panel border-2 border-hw-border shadow-inner cursor-pointer flex items-center justify-center"
+        onMouseDown={(e) => {
+          const startY = e.clientY;
+          const startValue = value;
+          const onMouseMove = (moveEvent: MouseEvent) => {
+            const deltaY = startY - moveEvent.clientY;
+            const newValue = Math.min(max, Math.max(min, startValue + deltaY * ((max - min) / 200)));
+            onChange(newValue);
+          };
+          const onMouseUp = () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+          };
+          window.addEventListener('mousemove', onMouseMove);
+          window.addEventListener('mouseup', onMouseUp);
+        }}
+      >
         <div 
-          className="absolute w-1 h-6 bg-hw-accent rounded-full origin-bottom transition-transform duration-75"
-          style={{ transform: `rotate(${rotation}deg)`, bottom: '50%' }}
-        ></div>
-        <input 
-          type="range" 
-          min={min} 
-          max={max} 
-          step={step} 
-          value={value} 
-          onChange={(e) => onChange(parseFloat(e.target.value))}
-          className="absolute inset-0 opacity-0 cursor-ns-resize"
+          className="absolute w-1 h-3 bg-hw-accent rounded-full top-1 origin-bottom"
+          style={{ transform: `rotate(${rotation}deg) translateY(-2px)` }}
         />
-        <div className="absolute -bottom-6 text-[10px] font-mono text-hw-text-dim">
-          {label === 'Pan' ? (value < -0.1 ? 'L' : value > 0.1 ? 'R' : 'C') : `${Math.round(value * 100)}%`}
+        <span className="text-[8px] font-mono text-hw-text-dim pointer-events-none">
+          {Math.round(value)}{unit}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+const Fader = ({ value, onChange, label }: { value: number, onChange: (v: number) => void, label: string }) => {
+  return (
+    <div className="flex flex-col items-center gap-2 h-full py-4">
+      <div className="relative h-48 w-8 bg-black/40 rounded-sm border border-hw-border flex flex-col items-center py-2">
+        {/* Scale marks */}
+        <div className="absolute inset-0 flex flex-col justify-between px-1 py-4 pointer-events-none opacity-20">
+          {[...Array(10)].map((_, i) => (
+            <div key={i} className="w-full h-[1px] bg-white" />
+          ))}
+        </div>
+        
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+          style={{ appearance: 'none', writingMode: 'bt-lr' }}
+        />
+        
+        <div 
+          className="absolute w-6 h-10 bg-hw-text rounded-sm shadow-lg border border-hw-border flex items-center justify-center pointer-events-none z-0"
+          style={{ bottom: `${value * 80}%` }}
+        >
+          <div className="w-full h-[2px] bg-red-500" />
         </div>
       </div>
+      <span className="text-[10px] font-mono uppercase text-hw-text-dim">{label}</span>
     </div>
   );
 };
@@ -67,13 +109,23 @@ export default function App() {
     setSelectedMidiId,
     setVolume,
     setPan,
+    reverb,
+    chorus,
+    setReverb,
+    setChorus,
+    presets,
+    selectedPreset,
+    selectedBank,
+    setInstrument,
     noteOn,
-    noteOff,
-    activeNotes
+    noteOff
   } = useSynthesizer();
 
   const [volume, setVol] = useState(0.8);
   const [pan, setP] = useState(0); // -1 to 1
+  const [eqHigh, setEqHigh] = useState(0);
+  const [eqMid, setEqMid] = useState(0);
+  const [eqLow, setEqLow] = useState(0);
   const [sfName, setSfName] = useState<string | null>(null);
   const [isPowerOn, setIsPowerOn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -116,6 +168,7 @@ export default function App() {
         const data = await response.json();
         setSfName(data.filename.toUpperCase());
         
+        // Load into synth from the new server URL
         const buffer = await file.arrayBuffer();
         await loadSoundFont(buffer);
       }
@@ -150,6 +203,20 @@ export default function App() {
     }
   };
 
+  const loadSamplePiano = async () => {
+    setIsLoading(true);
+    setSfName("SAMPLE UPRIGHT PIANO");
+    try {
+      // Small but good quality piano soundfont
+      await loadSoundFontFromUrl("https://spessasynth.js.org/soundfonts/default.sf2");
+    } catch (error) {
+      console.error("Failed to load sample piano", error);
+      setSfName("LOAD ERROR");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const togglePower = async () => {
     if (!isReady) {
       await initSynth();
@@ -161,8 +228,10 @@ export default function App() {
     if (isReady && isPowerOn) {
       setVolume(volume);
       setPan(pan);
+      setReverb(reverb);
+      setChorus(chorus);
     }
-  }, [isReady, isPowerOn, volume, pan, setVolume, setPan]);
+  }, [isReady, isPowerOn, volume, pan, reverb, chorus, setVolume, setPan, setReverb, setChorus]);
 
   useEffect(() => {
     setVolume(volume);
@@ -173,80 +242,108 @@ export default function App() {
   }, [pan, setPan]);
 
   return (
-    <div className="h-screen w-screen bg-hw-bg text-hw-text font-sans flex flex-col overflow-hidden">
-      {/* Main Sforzando Panel */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4">
-        <div className="w-full max-w-4xl bg-hw-panel border-2 border-hw-border rounded-sm shadow-2xl overflow-hidden flex flex-col">
-          
-          {/* Top Bar / Logo */}
-          <div className="bg-gradient-to-b from-hw-border/50 to-transparent p-2 border-b border-hw-border flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <div className="bg-hw-accent px-2 py-0.5 rounded-sm text-[10px] font-black text-black uppercase tracking-tighter">EVOLUTION</div>
-              <div className="text-[10px] font-bold text-hw-text-dim uppercase tracking-widest">PLAY v2.0</div>
-            </div>
-            <div className="flex gap-4">
-              <button 
-                onClick={() => setShowLibrary(!showLibrary)}
-                className="text-[10px] uppercase font-bold text-hw-text-dim hover:text-hw-accent transition-colors"
-              >
-                Instrument
-              </button>
-              <button className="text-[10px] uppercase font-bold text-hw-text-dim hover:text-hw-accent transition-colors">Settings</button>
-              <button className="text-[10px] uppercase font-bold text-hw-text-dim hover:text-hw-accent transition-colors">Info</button>
-            </div>
+    <div className="flex flex-col h-screen bg-hw-bg text-hw-text">
+      {/* Top Header */}
+      <header className="h-14 border-bottom border-hw-border bg-hw-panel flex items-center justify-between px-6 shadow-md z-20">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-hw-accent rounded-lg flex items-center justify-center shadow-lg">
+            <Activity className="text-white w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold tracking-tighter text-white">EVOLUTION PLAY</h1>
+            <p className="text-[10px] font-mono text-hw-text-dim uppercase tracking-widest">Digital Sample Station</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2 bg-black/30 px-3 py-1.5 rounded-full border border-hw-border">
+            <div className={`w-2 h-2 rounded-full ${selectedMidiId ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
+            <select 
+              className="bg-transparent text-xs font-mono outline-none cursor-pointer text-hw-text-dim"
+              value={selectedMidiId || ''}
+              onChange={(e) => setSelectedMidiId(e.target.value)}
+            >
+              <option value="">NO MIDI DEVICE</option>
+              {midiDevices.map(device => (
+                <option key={device.id} value={device.id}>{device.name}</option>
+              ))}
+            </select>
           </div>
 
-          {/* Main Control Area */}
-          <div className="p-6 flex gap-8 items-start relative">
-            
-            {/* Left: LCD Display */}
-            <div className="flex-1">
-              <div className="mb-1 flex justify-between items-end">
-                <span className="text-[9px] uppercase font-bold text-hw-text-dim">Loaded Instrument</span>
-                <span className="text-[9px] uppercase font-bold text-hw-text-dim">Poly: 128</span>
-              </div>
-              <div className="bg-hw-display border border-hw-border p-4 rounded-sm h-24 flex flex-col justify-center relative overflow-hidden">
-                <div className="absolute inset-0 bg-hw-lcd/5 pointer-events-none"></div>
-                {isLoading ? (
-                  <div className="flex items-center gap-2 text-hw-lcd animate-pulse">
-                    <div className="w-2 h-2 bg-hw-lcd rounded-full"></div>
-                    <span className="font-mono text-sm uppercase tracking-widest">Loading...</span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="text-hw-lcd font-mono text-lg truncate uppercase tracking-tighter">
-                      {sfName || "NO INSTRUMENT LOADED"}
-                    </div>
-                    <div className="text-hw-lcd/40 font-mono text-[10px] mt-1">
-                      {sfName ? "SF2 ENGINE | 44.1KHZ | 24BIT" : "PLEASE SELECT A SOUNDFONT"}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
+          <button 
+            onClick={togglePower}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-md border transition-all ${
+              isPowerOn 
+                ? 'bg-hw-accent border-hw-accent text-white shadow-[0_0_15px_rgba(242,125,38,0.4)]' 
+                : 'bg-hw-panel border-hw-border text-hw-text-dim hover:border-hw-text'
+            }`}
+          >
+            <Power className="w-4 h-4" />
+            <span className="text-xs font-bold uppercase tracking-wider">{isPowerOn ? 'ON' : 'OFF'}</span>
+          </button>
+        </div>
+      </header>
 
-            {/* Right: Main Knobs */}
-            <div className="flex gap-6">
-              <Knob label="Volume" value={volume} onChange={setVol} />
-              <Knob label="Pan" value={pan} onChange={setP} min={-1} max={1} />
-            </div>
+      {/* Main Content */}
+      <main className="flex-1 flex overflow-hidden">
+        {/* Left Sidebar - Browser/Settings */}
+        <aside className="w-64 border-r border-hw-border bg-hw-panel/50 flex flex-col">
+          <div className="p-4 border-b border-hw-border">
+            <h3 className="text-[10px] font-mono uppercase text-hw-text-dim mb-4 tracking-widest">Sound Library</h3>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full flex items-center justify-center gap-2 py-4 bg-hw-accent/20 border-2 border-dashed border-hw-accent/40 rounded-xl hover:border-hw-accent hover:bg-hw-accent/30 transition-all group shadow-lg"
+              >
+                <Plus className="w-5 h-5 text-hw-accent" />
+                <span className="text-sm font-bold uppercase tracking-tight">Import SF2 Timbre</span>
+              </button>
+            <input 
+              ref={fileInputRef}
+              type="file" 
+              accept=".sf2" 
+              className="hidden" 
+              onChange={handleFileUpload}
+            />
+          </div>
 
-            {/* Library Overlay */}
-            <AnimatePresence>
-              {showLibrary && (
+          <div className="flex-1 overflow-y-auto p-4">
+            <AnimatePresence mode="wait">
+              {isLoading ? (
                 <motion.div 
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="absolute inset-0 z-50 bg-hw-panel border border-hw-border p-4 flex flex-col"
+                  key="loading"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center justify-center py-10 gap-3"
                 >
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-hw-text-dim">Instrument Browser</h3>
-                    <button onClick={() => setShowLibrary(false)} className="text-hw-text-dim hover:text-hw-accent">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="flex-1 overflow-y-auto space-y-1 pr-2">
+                  <div className="w-8 h-8 border-2 border-hw-accent border-t-transparent rounded-full animate-spin" />
+                  <p className="text-[10px] font-mono text-hw-accent uppercase animate-pulse">Loading Samples...</p>
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key="library"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="space-y-4"
+                >
+                  {/* Active Sound Display */}
+                  {sfName && (
+                    <div className="p-3 bg-hw-accent/10 border border-hw-accent/20 rounded-lg flex items-start gap-3">
+                      <Music className="w-4 h-4 text-hw-accent shrink-0 mt-0.5" />
+                      <div className="overflow-hidden">
+                        <p className="text-xs font-bold text-white truncate">{sfName}</p>
+                        <p className="text-[10px] text-hw-accent uppercase font-mono mt-1">Active Sound</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Library List */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between px-1 mb-2">
+                      <span className="text-[10px] font-mono uppercase text-hw-text-dim">My Library</span>
+                      <span className="text-[10px] font-mono text-hw-text-dim">{library.length}</span>
+                    </div>
+                    
                     {library.length === 0 ? (
                       <div className="py-10 text-center border border-dashed border-hw-border rounded-lg opacity-30">
                         <FolderOpen className="w-8 h-8 mx-auto mb-2" />
@@ -256,8 +353,8 @@ export default function App() {
                       library.map((fileName) => (
                         <div 
                           key={fileName}
-                          onClick={() => { loadFromLibrary(fileName); setShowLibrary(false); }}
-                          className={`group flex items-center justify-between p-2 rounded-sm cursor-pointer transition-all ${
+                          onClick={() => loadFromLibrary(fileName)}
+                          className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all ${
                             sfName === fileName.toUpperCase() 
                               ? 'bg-hw-accent/20 border border-hw-accent/30' 
                               : 'hover:bg-white/5 border border-transparent'
@@ -284,84 +381,160 @@ export default function App() {
             </AnimatePresence>
           </div>
 
-          {/* Bottom Controls / MIDI */}
-          <div className="px-6 pb-6 flex justify-between items-center">
-            <div className="flex gap-4">
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-hw-text-dim">MIDI Input</span>
-                <select 
-                  value={selectedMidiId || ""} 
-                  onChange={(e) => setSelectedMidiId(e.target.value)}
-                  className="bg-hw-bg border border-hw-border text-[10px] text-hw-text px-2 py-1 rounded-sm outline-none focus:border-hw-accent"
-                >
-                  <option value="">No MIDI Device</option>
-                  {midiDevices.map(device => (
-                    <option key={device.id} value={device.id}>{device.name}</option>
-                  ))}
-                </select>
+          <div className="p-4 border-t border-hw-border bg-black/20">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-mono uppercase text-hw-text-dim">Engine Status</span>
+              <span className={`text-[10px] font-mono ${isReady ? 'text-green-500' : 'text-yellow-500'}`}>
+                {isReady ? 'READY' : 'WAITING'}
+              </span>
+            </div>
+            <div className="w-full h-1 bg-hw-border rounded-full overflow-hidden">
+              <motion.div 
+                className="h-full bg-hw-accent"
+                animate={{ width: isReady ? '100%' : '30%' }}
+              />
+            </div>
+          </div>
+        </aside>
+
+        {/* Mixer Area */}
+        <div className="flex-1 bg-[#121214] flex overflow-x-auto p-6 gap-4">
+          {/* Master Channel Strip */}
+          <div className="flex flex-col bg-hw-panel border border-hw-border rounded-xl shadow-2xl min-w-[140px] overflow-hidden">
+            <div className="p-3 bg-black/40 border-b border-hw-border flex items-center justify-between">
+              <span className="text-[10px] font-bold text-white uppercase tracking-widest">Master</span>
+              <Sliders className="w-3 h-3 text-hw-accent" />
+            </div>
+            
+            <div className="flex-1 flex flex-col items-center py-6 px-4 gap-8">
+              {/* EQ Section */}
+              <div className="grid grid-cols-1 gap-6">
+                <Knob label="Reverb" value={reverb * 100} onChange={(v) => setReverb(v / 100)} unit="%" />
+                <Knob label="Chorus" value={chorus * 100} onChange={(v) => setChorus(v / 100)} unit="%" />
               </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-hw-text-dim">Action</span>
-                <label className="bg-hw-bg border border-hw-border text-[10px] text-hw-text px-3 py-1 rounded-sm cursor-pointer hover:bg-hw-border transition-colors uppercase font-bold">
-                  Import SF2
-                  <input type="file" ref={fileInputRef} accept=".sf2" onChange={handleFileUpload} className="hidden" />
-                </label>
+
+              <div className="w-full h-[1px] bg-hw-border" />
+
+              {/* Pan */}
+              <Knob label="Pan" value={pan * 50 + 50} onChange={(v) => setP((v - 50) / 50)} min={0} max={100} />
+
+              {/* Fader */}
+              <Fader value={volume} onChange={setVol} label="Volume" />
+            </div>
+
+            <div className="p-3 bg-black/40 border-t border-hw-border flex justify-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-hw-accent animate-pulse" />
+              <div className="w-2 h-2 rounded-full bg-hw-accent/30" />
+            </div>
+          </div>
+
+          {/* Instrument Channel (Active) */}
+          <div className="flex flex-col bg-hw-panel border border-hw-border rounded-xl shadow-2xl min-w-[200px] overflow-hidden">
+            <div className="p-3 bg-black/40 border-b border-hw-border flex items-center justify-between">
+              <span className="text-[10px] font-bold text-white uppercase tracking-widest">Instrument</span>
+              <PianoIcon className="w-3 h-3 text-hw-accent" />
+            </div>
+            
+            <div className="flex-1 flex flex-col p-3 gap-4 overflow-hidden">
+              <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                {presets.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center opacity-30 text-center p-4">
+                    <Music className="w-8 h-8 mb-2" />
+                    <p className="text-[10px] uppercase font-mono">No Presets Loaded</p>
+                  </div>
+                ) : (
+                  presets.map((p, idx) => (
+                    <button
+                      key={`${p.bank}-${p.program}-${idx}`}
+                      onClick={() => setInstrument(p.bank, p.program)}
+                      className={`w-full text-left p-2 rounded text-[10px] font-mono truncate transition-all ${
+                        selectedPreset === p.program && selectedBank === p.bank
+                          ? 'bg-hw-accent text-white shadow-lg'
+                          : 'hover:bg-white/5 text-hw-text-dim'
+                      }`}
+                    >
+                      {p.bank}:{p.program.toString().padStart(3, '0')} - {p.presetName || p.name || 'Unnamed'}
+                    </button>
+                  ))
+                )}
+              </div>
+
+              <div className="w-full h-[1px] bg-hw-border" />
+              
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between text-[8px] font-mono text-hw-text-dim uppercase">
+                  <span>Bank: {selectedBank}</span>
+                  <span>Prog: {selectedPreset}</span>
+                </div>
               </div>
             </div>
 
-            <button 
-              onClick={togglePower}
-              className={`px-6 py-2 rounded-sm font-black uppercase tracking-widest text-xs transition-all border-2 ${
-                isPowerOn 
-                  ? 'bg-hw-accent text-black border-hw-accent shadow-[0_0_15px_rgba(242,125,38,0.4)]' 
-                  : 'bg-transparent text-hw-text-dim border-hw-border'
-              }`}
-            >
-              {isPowerOn ? 'POWER ON' : 'POWER OFF'}
-            </button>
+            <div className="p-3 bg-black/40 border-t border-hw-border flex justify-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-hw-accent" />
+            </div>
           </div>
 
-          {/* Keyboard Section */}
-          <div className="bg-hw-bg p-4 border-t border-hw-border">
-            <div className="relative h-32 flex select-none">
-              {Array.from({ length: 25 }).map((_, i) => {
-                const midiNote = 48 + i;
-                const isBlack = [1, 3, 6, 8, 10, 13, 15, 18, 20, 22].includes(i);
-                
-                if (isBlack) return null;
-
-                return (
-                  <div
-                    key={midiNote}
-                    onMouseDown={() => noteOn(midiNote)}
-                    onMouseUp={() => noteOff(midiNote)}
-                    onMouseLeave={() => noteOff(midiNote)}
-                    className={`relative flex-1 border-r border-black/20 last:border-r-0 transition-all cursor-pointer ${
-                      activeNotes.has(midiNote) 
-                        ? 'bg-hw-accent' 
-                        : 'bg-gradient-to-b from-white to-[#e0e0e0] hover:to-[#d0d0d0]'
-                    } rounded-b-sm shadow-sm`}
-                  >
-                    {/* Black Keys */}
-                    {[1, 3, 6, 8, 10, 13, 15, 18, 20, 22].includes(i + 1) && (
-                      <div
-                        onMouseDown={(e) => { e.stopPropagation(); noteOn(midiNote + 1); }}
-                        onMouseUp={(e) => { e.stopPropagation(); noteOff(midiNote + 1); }}
-                        onMouseLeave={(e) => { e.stopPropagation(); noteOff(midiNote + 1); }}
-                        className={`absolute top-0 -right-1/2 w-full h-20 z-10 transition-all ${
-                          activeNotes.has(midiNote + 1) 
-                            ? 'bg-hw-accent' 
-                            : 'bg-gradient-to-b from-[#333] to-black hover:from-[#444]'
-                        } rounded-b-md shadow-lg border-x border-b border-white/5`}
-                      />
-                    )}
-                  </div>
-                );
-              })}
+          {/* Instrument Channel (Placeholder for more channels) */}
+          <div className="flex flex-col bg-hw-panel/40 border border-hw-border/50 rounded-xl min-w-[140px] overflow-hidden opacity-60 grayscale">
+            <div className="p-3 bg-black/20 border-b border-hw-border/50 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-hw-text-dim uppercase tracking-widest">CH 02</span>
+            </div>
+            <div className="flex-1 flex flex-col items-center py-6 px-4 gap-8">
+              <div className="grid grid-cols-1 gap-6 opacity-50">
+                <Knob label="High" value={0} onChange={() => {}} />
+                <Knob label="Mid" value={0} onChange={() => {}} />
+                <Knob label="Low" value={0} onChange={() => {}} />
+              </div>
+              <div className="w-full h-[1px] bg-hw-border/30" />
+              <Knob label="Pan" value={50} onChange={() => {}} />
+              <Fader value={0.5} onChange={() => {}} label="Volume" />
             </div>
           </div>
         </div>
-      </div>
+      </main>
+
+      {/* Virtual Keyboard / Footer */}
+      <footer className="h-40 bg-hw-panel border-t border-hw-border flex flex-col">
+        <div className="h-8 bg-black/40 border-b border-hw-border flex items-center px-6 justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <KeyboardIcon className="w-3 h-3 text-hw-text-dim" />
+              <span className="text-[10px] font-mono text-hw-text-dim uppercase">Virtual Keyboard</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-[10px] font-mono text-hw-text-dim uppercase">Latency: 12ms</span>
+            <span className="text-[10px] font-mono text-hw-text-dim uppercase">CPU: 4%</span>
+          </div>
+        </div>
+        
+        <div className="flex-1 flex p-2 gap-1 overflow-x-auto">
+          {[...Array(36)].map((_, i) => {
+            const note = i + 48; // Start from C3
+            const isBlack = [1, 3, 6, 8, 10].includes(note % 12);
+            return (
+              <button
+                key={note}
+                onMouseDown={() => noteOn(note)}
+                onMouseUp={() => noteOff(note)}
+                onMouseLeave={() => noteOff(note)}
+                className={`
+                  relative flex-1 min-w-[30px] rounded-b-md transition-all active:scale-95
+                  ${isBlack 
+                    ? 'bg-black h-2/3 z-10 -mx-3 border-x border-hw-border hover:bg-zinc-800' 
+                    : 'bg-white h-full border border-hw-border hover:bg-zinc-100'}
+                `}
+              >
+                {!isBlack && (
+                  <span className="absolute bottom-2 left-0 right-0 text-[8px] text-black/30 font-bold text-center">
+                    {['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][note % 12]}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </footer>
     </div>
   );
 }
