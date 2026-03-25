@@ -4,7 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Evolution Play</title>
-    <script src="https://cdn.jsdelivr.net/npm/spessasynth@latest/dist/spessasynth.min.js"></script>
+    <script type="module">
+      import * as SpessaSynth from 'https://cdn.jsdelivr.net/gh/spessasynth/spessasynth@2.5.3/dist/spessasynth.min.js';
+      window.SpessaSynth = SpessaSynth;
+      console.log("📦 SpessaSynth carregado via Módulo ES e anexado ao window.");
+    </script>
   </head>
   <body>
     <div id="root"></div>

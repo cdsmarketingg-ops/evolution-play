@@ -130,19 +130,28 @@ export default function App() {
   const [isPowerOn, setIsPowerOn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [library, setLibrary] = useState<string[]>([]);
+  const [localLibrary, setLocalLibrary] = useState<SavedSoundFont[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
 
-  // Load library from server
+  // Load library from server and local storage
   const loadLibrary = async () => {
+    // 1. Load from IndexedDB (Always works)
+    try {
+      const local = await soundFontStorage.getAll();
+      setLocalLibrary(local);
+    } catch (err) {
+      console.error("Failed to load local library", err);
+    }
+
+    // 2. Try to load from server
     try {
       const response = await fetch('/api/soundfonts');
-      if (!response.ok) {
-        throw new Error(`Server responded with ${response.status}`);
+      if (response.ok) {
+        const data = await response.json();
+        setLibrary(data);
       }
-      const data = await response.json();
-      setLibrary(data);
     } catch (err) {
-      console.warn("Failed to load library from server. The app will work in memory-only mode.", err);
+      console.warn("Server library unavailable. Using local storage only.");
     }
   };
 
@@ -158,17 +167,24 @@ export default function App() {
 
     setIsLoading(true);
     try {
-      // Garantir que o motor está inicializado antes de carregar o timbre
+      // Ensure engine is initialized
       if (!isReady) {
         await initSynth();
       }
 
-      // 1. Carregar na memória do navegador imediatamente para feedback instantâneo
       const buffer = await file.arrayBuffer();
+      
+      // 1. Save to IndexedDB (Local persistence)
+      await soundFontStorage.save(file.name, buffer);
+      
+      // 2. Load into memory immediately
       await loadSoundFont(buffer);
       setSfName(file.name.toUpperCase());
+      
+      // 3. Refresh local library
+      await loadLibrary();
 
-      // 2. Tentar persistir no servidor em segundo plano
+      // 4. Try to persist to server in background
       const formData = new FormData();
       formData.append('file', file);
 
@@ -178,17 +194,15 @@ export default function App() {
       }).then(async (response) => {
         if (response.ok) {
           await loadLibrary();
-          console.log("✅ Timbre persistido no servidor com sucesso.");
-        } else {
-          console.warn("⚠️ O servidor não pôde salvar o timbre, mas ele está carregado na memória atual.");
+          console.log("✅ Timbre persistido no servidor.");
         }
-      }).catch(err => {
-        console.warn("⚠️ Erro de conexão com o servidor. O timbre funcionará apenas nesta sessão.", err);
+      }).catch(() => {
+        console.warn("⚠️ Servidor indisponível. Timbre salvo apenas localmente.");
       });
 
     } catch (error) {
       console.error("Failed to load soundfont", error);
-      alert("Erro ao carregar o arquivo .sf2");
+      alert("Erro ao carregar o arquivo .sf2. Verifique se o arquivo é válido.");
     } finally {
       setIsLoading(false);
     }
@@ -198,11 +212,30 @@ export default function App() {
     setIsLoading(true);
     try {
       const response = await fetch(`/soundfonts/${fileName}`);
+      if (!response.ok) throw new Error("Server file not found");
       const buffer = await response.arrayBuffer();
       await loadSoundFont(buffer);
       setSfName(fileName.toUpperCase());
     } catch (error) {
-      console.error("Failed to load from library", error);
+      console.warn("Failed to load from server library, checking local storage...");
+      // Fallback to local storage if server fails
+      const localMatch = localLibrary.find(item => item.name === fileName);
+      if (localMatch) {
+        await loadSoundFont(localMatch.data);
+        setSfName(fileName.toUpperCase());
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadFromLocal = async (item: SavedSoundFont) => {
+    setIsLoading(true);
+    try {
+      await loadSoundFont(item.data);
+      setSfName(item.name.toUpperCase());
+    } catch (error) {
+      console.error("Failed to load from local storage", error);
     } finally {
       setIsLoading(false);
     }
@@ -210,10 +243,21 @@ export default function App() {
 
   const deleteFromLibrary = async (fileName: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm(`Remover "${fileName}" permanentemente do servidor?`)) {
-      await fetch(`/api/soundfonts/${fileName}`, { method: 'DELETE' });
+    if (confirm(`Remover "${fileName}" do servidor?`)) {
+      try {
+        await fetch(`/api/soundfonts/${fileName}`, { method: 'DELETE' });
+        await loadLibrary();
+      } catch (err) {
+        alert("Erro ao deletar do servidor.");
+      }
+    }
+  };
+
+  const deleteFromLocal = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm(`Remover este timbre da memória local?`)) {
+      await soundFontStorage.delete(id);
       await loadLibrary();
-      if (sfName === fileName.toUpperCase()) setSfName(null);
     }
   };
 
@@ -352,43 +396,84 @@ export default function App() {
                   )}
 
                   {/* Library List */}
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between px-1 mb-2">
-                      <span className="text-[10px] font-mono uppercase text-hw-text-dim">My Library</span>
-                      <span className="text-[10px] font-mono text-hw-text-dim">{library.length}</span>
-                    </div>
-                    
-                    {library.length === 0 ? (
-                      <div className="py-10 text-center border border-dashed border-hw-border rounded-lg opacity-30">
-                        <FolderOpen className="w-8 h-8 mx-auto mb-2" />
-                        <p className="text-[10px] uppercase font-mono">Empty Server Folder</p>
+                  <div className="space-y-4">
+                    {/* Server Library */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between px-1 mb-2">
+                        <span className="text-[10px] font-mono uppercase text-hw-text-dim">Server Library</span>
+                        <span className="text-[10px] font-mono text-hw-text-dim">{library.length}</span>
                       </div>
-                    ) : (
-                      library.map((fileName) => (
-                        <div 
-                          key={fileName}
-                          onClick={() => loadFromLibrary(fileName)}
-                          className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all ${
-                            sfName === fileName.toUpperCase() 
-                              ? 'bg-hw-accent/20 border border-hw-accent/30' 
-                              : 'hover:bg-white/5 border border-transparent'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            <PianoIcon className={`w-3 h-3 ${sfName === fileName.toUpperCase() ? 'text-hw-accent' : 'text-hw-text-dim'}`} />
-                            <span className="text-[11px] truncate text-hw-text-dim group-hover:text-hw-text transition-colors">
-                              {fileName}
-                            </span>
-                          </div>
-                          <button 
-                            onClick={(e) => deleteFromLibrary(fileName, e)}
-                            className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-all"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                      
+                      {library.length === 0 ? (
+                        <div className="py-4 text-center border border-dashed border-hw-border rounded-lg opacity-30">
+                          <p className="text-[8px] uppercase font-mono">No files on server</p>
                         </div>
-                      ))
-                    )}
+                      ) : (
+                        library.map((fileName) => (
+                          <div 
+                            key={fileName}
+                            onClick={() => loadFromLibrary(fileName)}
+                            className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all ${
+                              sfName === fileName.toUpperCase() 
+                                ? 'bg-hw-accent/20 border border-hw-accent/30' 
+                                : 'hover:bg-white/5 border border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <PianoIcon className={`w-3 h-3 ${sfName === fileName.toUpperCase() ? 'text-hw-accent' : 'text-hw-text-dim'}`} />
+                              <span className="text-[11px] truncate text-hw-text-dim group-hover:text-hw-text transition-colors">
+                                {fileName}
+                              </span>
+                            </div>
+                            <button 
+                              onClick={(e) => deleteFromLibrary(fileName, e)}
+                              className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-all"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Local Library (IndexedDB) */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between px-1 mb-2">
+                        <span className="text-[10px] font-mono uppercase text-hw-text-dim">Local Memory</span>
+                        <span className="text-[10px] font-mono text-hw-text-dim">{localLibrary.length}</span>
+                      </div>
+                      
+                      {localLibrary.length === 0 ? (
+                        <div className="py-4 text-center border border-dashed border-hw-border rounded-lg opacity-30">
+                          <p className="text-[8px] uppercase font-mono">No local files</p>
+                        </div>
+                      ) : (
+                        localLibrary.map((item) => (
+                          <div 
+                            key={item.id}
+                            onClick={() => loadFromLocal(item)}
+                            className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all ${
+                              sfName === item.name.toUpperCase() 
+                                ? 'bg-hw-accent/20 border border-hw-accent/30' 
+                                : 'hover:bg-white/5 border border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <Activity className={`w-3 h-3 ${sfName === item.name.toUpperCase() ? 'text-hw-accent' : 'text-hw-text-dim'}`} />
+                              <span className="text-[11px] truncate text-hw-text-dim group-hover:text-hw-text transition-colors">
+                                {item.name}
+                              </span>
+                            </div>
+                            <button 
+                              onClick={(e) => deleteFromLocal(item.id, e)}
+                              className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-all"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               )}
@@ -408,9 +493,21 @@ export default function App() {
                 animate={{ width: isReady ? '100%' : '10%' }}
               />
             </div>
-            {!isReady && (
-              <p className="text-[8px] text-red-400 mt-2 uppercase font-mono leading-tight">
-                Library not loaded. Using basic oscillators (Sawtooth).
+            {!isReady ? (
+              <div className="mt-2">
+                <p className="text-[8px] text-red-400 uppercase font-mono leading-tight mb-2">
+                  Library not loaded. Using basic oscillators.
+                </p>
+                <button 
+                  onClick={() => initSynth()}
+                  className="w-full py-1 bg-hw-accent/20 border border-hw-accent/40 rounded text-[8px] font-bold uppercase hover:bg-hw-accent/40 transition-all"
+                >
+                  Retry Initialization
+                </button>
+              </div>
+            ) : (
+              <p className="text-[8px] text-green-500 mt-2 uppercase font-mono leading-tight">
+                SpessaSynth active. Real samples enabled.
               </p>
             )}
           </div>

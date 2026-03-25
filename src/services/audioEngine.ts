@@ -55,7 +55,7 @@ export const useSynthesizer = () => {
           console.log("✅ SpessaSynth inicializado com sucesso!");
           setIsReady(true);
         } else {
-          console.error("❌ Classe Synthetizer não encontrada no SpessaSynth.");
+          console.error("❌ Classe Synthetizer não encontrada no SpessaSynth. Verifique as exportações.");
           setIsReady(false);
         }
       } catch (e) {
@@ -63,7 +63,8 @@ export const useSynthesizer = () => {
         setIsReady(false);
       }
     } else {
-      console.warn("⚠️ SpessaSynth não encontrado no window.");
+      console.warn("⚠️ SpessaSynth não encontrado no window. Tentando novamente em 1s...");
+      setTimeout(initSynth, 1000);
       setIsReady(false);
     }
 
