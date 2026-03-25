@@ -49,13 +49,31 @@ export const useSynthesizer = () => {
     if ((window as any).FluidSynth) {
       try {
         const FluidSynth = (window as any).FluidSynth;
-        synthRef.current = new FluidSynth();
-        // FluidSynth-wasm geralmente precisa de inicialização assíncrona
-        if (synthRef.current.init) {
-          await synthRef.current.init(audioContextRef.current.sampleRate);
+        
+        // Algumas versões usam um padrão de inicialização específico
+        if (typeof FluidSynth === 'function') {
+          synthRef.current = new FluidSynth();
+        } else if (FluidSynth.create) {
+          synthRef.current = await FluidSynth.create();
         }
-        console.log("✅ FluidSynth inicializado com sucesso!");
-        setIsReady(true);
+
+        if (synthRef.current) {
+          // Inicializar com o sample rate do contexto
+          if (synthRef.current.init) {
+            await synthRef.current.init(audioContextRef.current.sampleRate);
+          }
+          
+          // Conectar ao master gain
+          if (synthRef.current.getAudioNode) {
+            const node = synthRef.current.getAudioNode();
+            node.connect(masterGainRef.current);
+          } else if (synthRef.current.connect) {
+            synthRef.current.connect(masterGainRef.current);
+          }
+
+          console.log("✅ FluidSynth (@logue) inicializado com sucesso!");
+          setIsReady(true);
+        }
       } catch (e) {
         console.error("Erro ao inicializar FluidSynth:", e);
         setIsReady(false);
@@ -70,16 +88,27 @@ export const useSynthesizer = () => {
   };
 
   const loadSoundFont = async (buffer: ArrayBuffer) => {
-    if (synthRef.current && (window as any).FluidSynth) {
+    if (synthRef.current) {
       try {
         // No FluidSynth-wasm, carregamos o buffer diretamente
-        const sfontId = await synthRef.current.loadSfont(buffer);
-        console.log(`✅ SoundFont carregado com sucesso no FluidSynth. ID: ${sfontId}`);
-        
-        // FluidSynth-wasm pode não retornar presets facilmente sem comandos MIDI
-        // Vamos assumir um preset padrão ou tentar obter se a API permitir
-        setPresets([{ bank: 0, program: 0, name: "Default FluidSynth Preset" }]);
-        setInstrument(0, 0);
+        // Algumas APIs usam loadSfont, outras loadSoundFont
+        const loadFn = synthRef.current.loadSfont || synthRef.current.loadSoundFont;
+        if (loadFn) {
+          const sfontId = await loadFn.call(synthRef.current, buffer);
+          console.log(`✅ SoundFont carregado com sucesso no FluidSynth. ID: ${sfontId}`);
+          
+          // Tentar obter presets se disponível
+          if (synthRef.current.getPresets) {
+            const p = await synthRef.current.getPresets();
+            setPresets(p);
+          } else {
+            setPresets([{ bank: 0, program: 0, name: "Default FluidSynth Preset" }]);
+          }
+          
+          setInstrument(0, 0);
+        } else {
+          console.error("Método de carregamento de SoundFont não encontrado no FluidSynth");
+        }
       } catch (e) {
         console.error("Erro ao carregar SoundFont no FluidSynth:", e);
       }
@@ -89,9 +118,13 @@ export const useSynthesizer = () => {
   };
 
   const setInstrument = (bank: number, program: number) => {
-    if (synthRef.current && (window as any).FluidSynth) {
-      synthRef.current.bankSelect(0, bank);
-      synthRef.current.programChange(0, program);
+    if (synthRef.current) {
+      if (synthRef.current.bankSelect) synthRef.current.bankSelect(0, bank);
+      if (synthRef.current.programChange) synthRef.current.programChange(0, program);
+      
+      // Algumas APIs usam setInstrument diretamente
+      if (synthRef.current.setInstrument) synthRef.current.setInstrument(0, bank, program);
+      
       setSelectedBank(bank);
       setSelectedPreset(program);
       console.log(`🎹 Instrumento alterado no FluidSynth: Bank ${bank}, Program ${program}`);
@@ -99,12 +132,12 @@ export const useSynthesizer = () => {
   };
 
   const loadSoundFontFromUrl = async (url: string) => {
-    if (synthRef.current && (window as any).FluidSynth) {
+    if (synthRef.current) {
       try {
         const response = await fetch(url);
         const buffer = await response.arrayBuffer();
-        const sfontId = await synthRef.current.loadSfont(buffer);
-        console.log(`✅ SoundFont carregado de URL no FluidSynth: ${url}. ID: ${sfontId}`);
+        await loadSoundFont(buffer);
+        console.log(`✅ SoundFont carregado de URL no FluidSynth: ${url}`);
       } catch (e) {
         console.error("Erro ao carregar SoundFont de URL no FluidSynth:", e);
       }
@@ -126,10 +159,12 @@ export const useSynthesizer = () => {
 
     console.log(`🎵 Tocando nota no FluidSynth: ${note} (Vel: ${velocity})`);
 
-    if (synthRef.current && (window as any).FluidSynth) {
+    if (synthRef.current) {
       // Usar FluidSynth
-      synthRef.current.noteOn(0, note, velocity);
-      activeVoices.current.set(note, true);
+      if (synthRef.current.noteOn) {
+        synthRef.current.noteOn(0, note, velocity);
+        activeVoices.current.set(note, true);
+      }
     } else {
       // Fallback para osciladores básicos (Som "Moog" Sawtooth)
       console.warn(`⚠️ Usando fallback de oscilador para nota ${note}. FluidSynth não está ativo.`);
@@ -162,9 +197,11 @@ export const useSynthesizer = () => {
   };
 
   const noteOff = (note: number) => {
-    if (synthRef.current && (window as any).FluidSynth) {
-      synthRef.current.noteOff(0, note);
-      activeVoices.current.delete(note);
+    if (synthRef.current) {
+      if (synthRef.current.noteOff) {
+        synthRef.current.noteOff(0, note);
+        activeVoices.current.delete(note);
+      }
       return;
     }
 
@@ -203,16 +240,28 @@ export const useSynthesizer = () => {
 
   const setReverb = (val: number) => {
     if (synthRef.current) {
-      // FluidSynth reverb is usually 0 to 1
-      synthRef.current.reverbLevel = val;
+      // Tentar diferentes formas de definir o reverb
+      if (synthRef.current.setReverb) {
+        synthRef.current.setReverb(val);
+      } else if (typeof synthRef.current.reverbLevel !== 'undefined') {
+        synthRef.current.reverbLevel = val;
+      } else if (synthRef.current.reverb) {
+        synthRef.current.reverb = val;
+      }
       setReverbLevel(val);
     }
   };
 
   const setChorus = (val: number) => {
     if (synthRef.current) {
-      // FluidSynth chorus is usually 0 to 1
-      synthRef.current.chorusLevel = val;
+      // Tentar diferentes formas de definir o chorus
+      if (synthRef.current.setChorus) {
+        synthRef.current.setChorus(val);
+      } else if (typeof synthRef.current.chorusLevel !== 'undefined') {
+        synthRef.current.chorusLevel = val;
+      } else if (synthRef.current.chorus) {
+        synthRef.current.chorus = val;
+      }
       setChorusLevel(val);
     }
   };
