@@ -398,16 +398,21 @@ export default function App() {
           <div className="p-4 border-t border-hw-border bg-black/20">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono uppercase text-hw-text-dim">Engine Status</span>
-              <span className={`text-[10px] font-mono ${isReady ? 'text-green-500' : 'text-yellow-500'}`}>
-                {isReady ? 'READY' : 'WAITING'}
+              <span className={`text-[10px] font-mono ${isReady ? 'text-green-500' : 'text-red-500'}`}>
+                {isReady ? 'READY (HI-FI)' : 'NOT READY'}
               </span>
             </div>
             <div className="w-full h-1 bg-hw-border rounded-full overflow-hidden">
               <motion.div 
-                className="h-full bg-hw-accent"
-                animate={{ width: isReady ? '100%' : '30%' }}
+                className={`h-full ${isReady ? 'bg-hw-accent' : 'bg-red-500'}`}
+                animate={{ width: isReady ? '100%' : '10%' }}
               />
             </div>
+            {!isReady && (
+              <p className="text-[8px] text-red-400 mt-2 uppercase font-mono leading-tight">
+                Library not loaded. Using basic oscillators (Sawtooth).
+              </p>
+            )}
           </div>
         </aside>
 

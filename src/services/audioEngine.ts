@@ -24,10 +24,13 @@ export const useSynthesizer = () => {
   const activeVoices = useRef<Map<number, any>>(new Map());
 
   const initSynth = async () => {
-    if (audioContextRef.current) return;
+    // Se já temos o synth, não reinicializamos a menos que ele tenha falhado
+    if (audioContextRef.current && synthRef.current) return;
     
-    const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
-    audioContextRef.current = new AudioContextClass();
+    if (!audioContextRef.current) {
+      const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+      audioContextRef.current = new AudioContextClass();
+    }
 
     if (audioContextRef.current.state === 'suspended') {
       await audioContextRef.current.resume();
@@ -45,39 +48,57 @@ export const useSynthesizer = () => {
     // Inicializar SpessaSynth se disponível
     if ((window as any).SpessaSynth) {
       try {
-        synthRef.current = new (window as any).SpessaSynth.Synthetizer(masterGainRef.current);
-        console.log("✅ SpessaSynth (FluidSynth JS) inicializado!");
+        const Spessa = (window as any).SpessaSynth;
+        const SynthClass = Spessa.Synthetizer || Spessa.Synthesizer;
+        if (SynthClass) {
+          synthRef.current = new SynthClass(masterGainRef.current);
+          console.log("✅ SpessaSynth inicializado com sucesso!");
+          setIsReady(true);
+        } else {
+          console.error("❌ Classe Synthetizer não encontrada no SpessaSynth.");
+          setIsReady(false);
+        }
       } catch (e) {
         console.error("Erro ao inicializar SpessaSynth:", e);
+        setIsReady(false);
       }
     } else {
-      console.warn("⚠️ SpessaSynth não encontrado no window. Usando osciladores básicos.");
+      console.warn("⚠️ SpessaSynth não encontrado no window.");
+      setIsReady(false);
     }
 
-    setIsReady(true);
-    console.log("✅ Motor de Som Nativo (Evolution Engine) iniciado com sucesso!");
+    console.log("✅ Motor de Som Nativo (Evolution Engine) iniciado!");
   };
 
   const loadSoundFont = async (buffer: ArrayBuffer) => {
-    if (synthRef.current) {
+    if (synthRef.current && (window as any).SpessaSynth) {
       try {
-        await synthRef.current.loadSoundFont(buffer);
+        const Spessa = (window as any).SpessaSynth;
+        // No SpessaSynth moderno, precisamos criar um objeto SoundFont2 a partir do buffer
+        const sf = new Spessa.SoundFont2(buffer);
+        synthRef.current.loadSoundFont(sf);
+        
         console.log("✅ SoundFont carregado com sucesso no SpessaSynth.");
         
-        // Obter lista de presets se disponível
+        // Obter lista de presets
         if (synthRef.current.soundfont && synthRef.current.soundfont.presets) {
-          setPresets(synthRef.current.soundfont.presets);
+          const sfPresets = synthRef.current.soundfont.presets.map((p: any) => ({
+            bank: p.bank,
+            program: p.program,
+            name: p.presetName || p.name || `Preset ${p.program}`
+          }));
+          setPresets(sfPresets);
+          
           // Selecionar o primeiro preset disponível
-          if (synthRef.current.soundfont.presets.length > 0) {
-            const p = synthRef.current.soundfont.presets[0];
-            setInstrument(p.bank, p.program);
+          if (sfPresets.length > 0) {
+            setInstrument(sfPresets[0].bank, sfPresets[0].program);
           }
         }
       } catch (e) {
         console.error("Erro ao carregar SoundFont no SpessaSynth:", e);
       }
     } else {
-      console.log("Som carregado na memória local (Simulação).");
+      console.warn("SpessaSynth não disponível para carregar o buffer.");
     }
   };
 
@@ -92,11 +113,13 @@ export const useSynthesizer = () => {
   };
 
   const loadSoundFontFromUrl = async (url: string) => {
-    if (synthRef.current) {
+    if (synthRef.current && (window as any).SpessaSynth) {
       try {
         const response = await fetch(url);
         const buffer = await response.arrayBuffer();
-        await synthRef.current.loadSoundFont(buffer);
+        const Spessa = (window as any).SpessaSynth;
+        const sf = new Spessa.SoundFont2(buffer);
+        synthRef.current.loadSoundFont(sf);
         console.log(`✅ SoundFont carregado de URL: ${url}`);
       } catch (e) {
         console.error("Erro ao carregar SoundFont de URL:", e);
@@ -124,7 +147,8 @@ export const useSynthesizer = () => {
       synthRef.current.noteOn(0, note, velocity);
       activeVoices.current.set(note, true);
     } else {
-      // Fallback para osciladores básicos
+      // Fallback para osciladores básicos (Som "Moog" Sawtooth)
+      console.warn(`⚠️ Usando fallback de oscilador para nota ${note}. SpessaSynth não está ativo.`);
       const freq = 440 * Math.pow(2, (note - 69) / 12);
       
       const osc1 = audioContextRef.current.createOscillator();
