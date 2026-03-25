@@ -1,0 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-hw-bg: #1a1a1a;
+  --color-hw-panel: #2a2a2a;
+  --color-hw-display: #0a0c0a;
+  --color-hw-lcd: #33ff33;
+  --color-hw-accent: #f27d26;
+  --color-hw-border: #3a3a3a;
+  --color-hw-text: #e0e0e0;
+  --color-hw-text-dim: #888888;
+}
+
+@layer base {
+  body {
+    @apply bg-hw-bg text-hw-text font-sans overflow-hidden;
+  }
+}
+
+/* Custom Knob/Slider styles to mimic hardware */
+input[type="range"].vertical-slider {
+  writing-mode: bt-lr; /* bottom to top */
+  appearance: slider-vertical;
+  width: 8px;
+  height: 100px;
+  padding: 0 5px;
+}
+
+.knob-container {
+  @apply relative w-12 h-12 flex items-center justify-center;
+}
+
+.knob-indicator {
+  @apply absolute w-1 h-4 bg-hw-accent rounded-full origin-bottom;
+  bottom: 50%;
+}
+
+.mixer-strip {
+  @apply flex flex-col items-center p-4 border-r border-hw-border bg-hw-panel w-32 min-h-screen;
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Evolution Play",
+  "description": "Professional Web MIDI SoundFont (SF2) Player with a hardware-inspired mixer interface.",
+  "requestFramePermissions": ["microphone", "midi"]
+}
